@@ -1,69 +1,86 @@
 import os
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # ví dụ https://ten-app.onrender.com/webhook
 
 HF_MODEL_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-headers = {
-    "Authorization": f"Bearer {HF_TOKEN}"
-}
+bot = Bot(BOT_TOKEN)
+app = Flask(__name__)
+
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 def generate_image(prompt: str):
     payload = {"inputs": prompt}
-    response = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=120)
-    response.raise_for_status()
-    return response.content  # ảnh dạng bytes
+    r = requests.post(HF_MODEL_URL, headers=headers, json=payload, timeout=120)
+    r.raise_for_status()
+    return r.content
 
-# /start
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot AI tạo ảnh đã online.\n"
-        "Dùng: /ve <mô tả ảnh>\n"
-        "Ví dụ: /ve con mèo phi hành gia phong cách cyberpunk"
+        "Bot AI tạo ảnh online.\nDùng /ve <mô tả>"
     )
 
-# /ve command
+
 async def draw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Gõ mô tả sau lệnh. Ví dụ: /ve rồng lửa bay trên thành phố tương lai")
+        await update.message.reply_text("Thiếu mô tả ảnh.")
         return
 
     prompt = " ".join(context.args)
-    msg = await update.message.reply_text("Đang vẽ... AI đang suy nghĩ 🧠🎨")
+    msg = await update.message.reply_text("Đang vẽ...")
 
     try:
-        image_bytes = generate_image(prompt)
-        await update.message.reply_photo(photo=image_bytes)
+        image = generate_image(prompt)
+        await update.message.reply_photo(photo=image)
         await msg.delete()
     except Exception as e:
-        await msg.edit_text(f"Lỗi khi tạo ảnh:\n{e}")
+        await msg.edit_text(f"Lỗi: {e}")
 
-# Cho phép dùng trong group khi bot được add
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text.lower().startswith("vẽ "):
+    text = update.message.text.lower()
+    if text.startswith("vẽ "):
         prompt = text[3:]
-        msg = await update.message.reply_text("Đang vẽ ảnh cho nhóm...")
+        msg = await update.message.reply_text("Đang vẽ cho nhóm...")
         try:
-            image_bytes = generate_image(prompt)
-            await update.message.reply_photo(photo=image_bytes)
+            image = generate_image(prompt)
+            await update.message.reply_photo(photo=image)
             await msg.delete()
         except Exception as e:
             await msg.edit_text(f"Lỗi: {e}")
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ve", draw))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("ve", draw))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("Bot đang chạy...")
-    app.run_polling()
+
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, bot)
+    await telegram_app.process_update(update)
+    return "ok"
+
+
+@app.route("/")
+def home():
+    return "Bot is running."
+
+
+def set_webhook():
+    bot.set_webhook(WEBHOOK_URL)
+
 
 if __name__ == "__main__":
-    main()
+    set_webhook()
+    telegram_app.initialize()
+    telegram_app.start()
