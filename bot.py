@@ -9,7 +9,7 @@ import os
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 HF_TOKEN = os.getenv('HF_TOKEN')
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)  # Thêm threaded=False để tương thích Render free
 client = InferenceClient(api_key=HF_TOKEN)
 
 @bot.message_handler(commands=['start', 'help'])
@@ -47,7 +47,7 @@ def generate_image(message):
     except Exception as e:
         bot.reply_to(message, f"Lỗi: {str(e)}. Hãy thử prompt khác hoặc kiểm tra token.")
 
-# Webhook endpoint (giữ nguyên)
+# Webhook endpoint
 app = Flask(__name__)
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
