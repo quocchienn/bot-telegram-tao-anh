@@ -1,0 +1,5 @@
+pyTelegramBotAPI
+huggingface_hub
+pillow
+flask
+gunicorn
