@@ -1,50 +1,96 @@
 import os
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
+# ===== ENV =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
-PORT = int(os.getenv("PORT", 10000))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+BASE_URL = os.getenv("BASE_URL")  # https://your-app.onrender.com
 
-HF_MODEL_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+# ===== HF MODEL (đổi nếu muốn) =====
+HF_API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
+
+headers = {
+    "Authorization": f"Bearer {HF_TOKEN}"
+}
+
+# ===== TẠO APP TELEGRAM =====
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+bot = Bot(BOT_TOKEN)
+
+# ===== HÀM GỌI HUGGING FACE =====
+def generate_image(prompt: str):
+    response = requests.post(
+        HF_API_URL,
+        headers=headers,
+        json={"inputs": prompt},
+        timeout=120
+    )
+
+    if response.status_code != 200:
+        return None, response.text
+
+    return response.content, None
 
 
-def generate_image(prompt):
-    r = requests.post(HF_MODEL_URL, headers=headers, json={"inputs": prompt}, timeout=120)
-    r.raise_for_status()
-    return r.content
-
-
+# ===== LỆNH /start =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot tạo ảnh online. Dùng /ve <mô tả>")
+    await update.message.reply_text(
+        "Gửi:\n/ve mô tả ảnh\nVí dụ:\n/ve chiến binh samurai máy móc giữa thành phố neon"
+    )
 
 
+# ===== LỆNH TẠO ẢNH =====
 async def draw(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prompt = " ".join(context.args)
-    if not prompt:
-        await update.message.reply_text("Thiếu mô tả.")
+    if not context.args:
+        await update.message.reply_text("Thiếu mô tả ảnh.")
         return
 
-    msg = await update.message.reply_text("Đang vẽ...")
-    try:
-        img = generate_image(prompt)
-        await update.message.reply_photo(photo=img)
-        await msg.delete()
-    except Exception as e:
-        await msg.edit_text(str(e))
+    prompt = " ".join(context.args)
+    msg = await update.message.reply_text("Đang tạo ảnh...")
+
+    img, err = generate_image(prompt)
+
+    if err:
+        await msg.edit_text("Lỗi AI: " + err[:200])
+        return
+
+    await update.message.reply_photo(photo=img)
+    await msg.delete()
 
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("ve", draw))
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("ve", draw))
+
+
+# ===== FLASK WEBHOOK SERVER =====
+app = Flask(__name__)
+
+@app.route("/webhook", methods=["POST"])
+async def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, bot)
+    await telegram_app.process_update(update)
+    return "ok"
+
+
+@app.route("/")
+def home():
+    return "Bot is running"
+
+
+# ===== SET WEBHOOK KHI SERVER START =====
+async def set_webhook():
+    await bot.set_webhook(f"{BASE_URL}/webhook")
 
 
 if __name__ == "__main__":
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL
-    )
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(set_webhook())
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
